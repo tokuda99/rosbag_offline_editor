@@ -1,0 +1,106 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <class>BagEditorForm</class>
+ <widget class="QMainWindow" name="BagEditorForm">
+  <property name="geometry">
+   <rect>
+    <x>0</x>
+    <y>0</y>
+    <width>1000</width>
+    <height>1000</height>
+   </rect>
+  </property>
+  <property name="windowTitle">
+   <string>ROS Bag Editor</string>
+  </property>
+
+  <!-- centralwidget: メインコンテンツ領域 -->
+  <widget class="QWidget" name="centralwidget">
+   <layout class="QVBoxLayout" name="verticalLayout">
+    <!-- (1) 上部のボタン群 (Open / Save) -->
+    <item>
+     <layout class="QHBoxLayout" name="buttonLayout">
+      <!-- Open Bag/Dir -->
+      <item>
+       <widget class="QPushButton" name="openButton">
+        <property name="text">
+         <string>Open Bag or Directory</string>
+        </property>
+       </widget>
+      </item>
+      <!-- Save Modified Bag -->
+      <item>
+       <widget class="QPushButton" name="saveButton">
+        <property name="text">
+         <string>Save Modified Bag</string>
+        </property>
+        <!-- デフォルトで無効化しておく場合、以下を設定 -->
+        <property name="enabled">
+         <bool>false</bool>
+        </property>
+       </widget>
+      </item>
+     </layout>
+    </item>
+
+    <!-- (2) 出力形式選択 (ROS1 / ROS2) -->
+    <item>
+     <layout class="QHBoxLayout" name="formatLayout">
+      <item>
+       <widget class="QLabel" name="formatLabel">
+        <property name="text">
+         <string>Output Format:</string>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <widget class="QComboBox" name="formatCombo">
+        <item>
+         <property name="text">
+          <string>ROS1</string>
+         </property>
+        </item>
+        <item>
+         <property name="text">
+          <string>ROS2</string>
+         </property>
+        </item>
+       </widget>
+      </item>
+     </layout>
+    </item>
+
+    <!-- (3) トピック一覧を表示するテーブル -->
+    <item>
+     <widget class="QTableWidget" name="topicTable">
+      <property name="columnCount">
+       <number>3</number>
+      </property>
+      <property name="rowCount">
+       <number>0</number>
+      </property>
+      <!-- ヘッダ名を設定 (Designer上では別手段で設定できる) -->
+      <property name="horizontalHeaderLabels">
+       <stringlist>
+        <string>Topic</string>
+        <string>MsgType</string>
+        <string>Frame ID</string>
+       </stringlist>
+      </property>
+     </widget>
+    </item>
+
+   </layout>
+  </widget>
+
+  <!-- メニューバー・ステータスバー: 必要に応じて -->
+  <widget class="QMenuBar" name="menubar"/>
+  <widget class="QStatusBar" name="statusbar"/>
+
+ </widget>
+
+ <!-- リソースファイルは使わないなら空のまま -->
+ <resources/>
+ <!-- シグナル/スロット接続はDesignerで設定しないなら空のまま -->
+ <connections/>
+</ui>

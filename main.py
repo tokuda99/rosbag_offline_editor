@@ -1,21 +1,34 @@
 import sys
+import signal
 from PyQt5.QtWidgets import QApplication
-from app.main_window import MainWindow
-from app.models.data_model import DataModel
-from app.controllers.data_controller import DataController
+from app.views.bag_editor_window import BagEditorWindow
+from app.models.bag_model import BagModel
+from app.controllers.bag_editor_controller import BagEditorController
 
+def sigint_handler(signum, frame):
+    """
+    Ctrl+C が押された時に呼ばれるハンドラ。
+    ここではアプリケーションを終了する動作にする。
+    """
+    print("SIGINT (Ctrl+C) detected. Exiting application...")
+    # 終了処理があればここで実行
+    sys.exit(0)
+    
 def main():
+    # signal.signal(signal.SIGINT, sigint_handler)
+    signal.signal(signal.SIGINT, signal.SIG_DFL)
+
     app = QApplication(sys.argv)
 
-    model = DataModel()
+    # Modelインスタンスを生成
+    model = BagModel()
 
-    main_window = MainWindow()
+    # メインウィンドウ (View) を生成
+    window = BagEditorWindow()
 
-    controller = DataController(model, main_window)
-
-    main_window.set_controller(controller)
-
-    main_window.show()
+    # Controller を生成し、モデルとメインウィンドウを渡す
+    controller = BagEditorController(model, window)
+    window.show()
     sys.exit(app.exec_())
 
 if __name__ == "__main__":
