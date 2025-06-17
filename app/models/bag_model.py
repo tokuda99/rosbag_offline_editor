@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, cast
 import yaml
 from fnmatch import fnmatch
 
-from rosbags.interfaces import ConnectionExtRosbag2
+from rosbags.interfaces import Connection, ConnectionExtRosbag2
 from rosbags.typesys import Stores, get_typestore, get_types_from_msg
 
 typestore = get_typestore(Stores.ROS2_JAZZY)
@@ -110,64 +110,77 @@ class BagModel:
                 with Rosbag2Writer(out_path) as writer:
                     self._write_bag2(reader, writer, updated_meta)
 
-    def _write_bag1(self, reader: AnyReader, writer, meta_info: Dict[int, Dict[str, Any]]):
+    def _process_and_write_messages(self, reader: AnyReader, writer, meta_info: Dict[int, Dict[str, Any]], conn_map: Dict[int, Connection]):
         """
-        メッセージを1つずつ読み出して書き込み。
+        メッセージを走査し、必要ならframe_idを書き換え、書き込む共通ヘルパー関数。
         """
-        filtered_msg = ["rcl_interfaces/*", "rosbag2_interfaces/*"]
-        conn_map = {}
-        # 1) 接続情報を追加
-        for connection in reader.connections:
-            cid = connection.id
-            if cid not in meta_info:
-                continue
-            if any([fnmatch(connection.msgtype, pat) for pat in filtered_msg]):
-                print(f"Skip: {connection.msgtype}")
-                continue
-            new_topic = meta_info[cid]["topic"]
-            new_msgtype = meta_info[cid]["msgtype"]
-            conn_map[cid] = writer.add_connection(
-                topic=new_topic,
-                msgtype=new_msgtype,
-                typestore=reader.typestore  # 必要に応じて変更
-            )
-        # 2) メッセージ実体をコピー
-        for conn, ts, data in reader.messages():
-            if conn.id not in conn_map:
-                continue
-            wconn = conn_map[conn.id]
+        # 保存対象のconnectionのみを効率的に読み込む
+        target_connections = [c for c in reader.connections if c.id in conn_map]
+
+        for conn, ts, data in reader.messages(connections=target_connections):
+            cid = conn.id
+            wconn = conn_map[cid]
+            
+            # frame_idの書き換えが必要かチェック
+            if "frame_id" in meta_info[cid]:
+                try:
+                    msg = reader.typestore.deserialize_cdr(data, conn.msgtype)
+                    if hasattr(msg, 'header') and hasattr(msg.header, 'frame_id'):
+                        new_frame_id = meta_info[cid]["frame_id"]
+                        if msg.header.frame_id != new_frame_id:
+                            msg.header.frame_id = new_frame_id
+                            # 変更があった場合、メッセージを再シリアライズ
+                            data = reader.typestore.serialize_cdr(msg, conn.msgtype)
+                except Exception as e:
+                    print(f"Warning: Could not modify frame_id for topic {conn.topic}. Error: {e}")
+            
             writer.write(wconn, ts, data)
 
-    def _write_bag2(self, reader: AnyReader, writer, meta_info: Dict[int, Dict[str, Any]]):
+    def _write_bag1(self, reader: AnyReader, writer: Rosbag1Writer, meta_info: Dict[int, Dict[str, Any]]):
         """
-        メッセージを1つずつ読み出して書き込み。
+        ROS1形式のバッグに接続情報とメッセージを書き込む。
         """
         conn_map = {}
-        filtered_msg = ["rcl_interfaces/*", "rosbag2_interfaces/*"]
-
-        # 1) 接続情報を追加
-        for connection in reader.connections:
-            cid = connection.id
-            if cid not in meta_info:
-                continue
-            if any([fnmatch(connection.msgtype, pat) for pat in filtered_msg]):
-                print(f"Skip: {connection.msgtype}")
+        filtered_patterns = ["rcl_interfaces/*", "rosbag2_interfaces/*"]
+        connections_by_id = {c.id: c for c in reader.connections}
+        # 1) ROS1用の接続情報を追加
+        for cid, info in meta_info.items():
+            connection = connections_by_id[cid]
+            if any(fnmatch(connection.msgtype, pat) for pat in filtered_patterns):
                 continue
             
-            new_topic = meta_info[cid]["topic"]
-            new_msgtype = meta_info[cid]["msgtype"]
-            ext = cast('ConnectionExtRosbag2', connection.ext)
-            qos = meta_info[cid]["qos"]
             conn_map[cid] = writer.add_connection(
-                topic=new_topic,
-                msgtype=new_msgtype,
+                topic=info["topic"],
+                msgtype=info["msgtype"],
+                typestore=reader.typestore
+            )
+        
+        # 2) メッセージの処理と書き込みを共通ヘルパーに委譲
+        self._process_and_write_messages(reader, writer, meta_info, conn_map)
+
+    def _write_bag2(self, reader: AnyReader, writer: Rosbag2Writer, meta_info: Dict[int, Dict[str, Any]]):
+        """
+        ROS2形式のバッグに接続情報とメッセージを書き込む。
+        """
+        conn_map = {}
+        filtered_patterns = ["rcl_interfaces/*", "rosbag2_interfaces/*"]
+        connections_by_id = {c.id: c for c in reader.connections}
+        
+        # 1) ROS2用の接続情報を追加
+        for cid, info in meta_info.items():
+            connection = connections_by_id[cid]
+            if any(fnmatch(connection.msgtype, pat) for pat in filtered_patterns):
+                continue
+            
+            ext = cast('ConnectionExtRosbag2', connection.ext)
+            qos = info.get("qos", ext.offered_qos_profiles[0] if ext.offered_qos_profiles else None)
+            conn_map[cid] = writer.add_connection(
+                topic=info["topic"],
+                msgtype=info["msgtype"],
                 typestore=reader.typestore,
                 serialization_format=ext.serialization_format,
-                offered_qos_profiles=[qos]  # rosbag2は途中でQosが変わるためリストであるが初期Qosをとりあえず使用することにする。
+                offered_qos_profiles=[qos] if qos else []
             )
-        # 2) メッセージ実体をコピー
-        for conn, ts, data in reader.messages():
-            if conn.id not in conn_map:
-                continue
-            wconn = conn_map[conn.id]
-            writer.write(wconn, ts, data)
+
+        # 2) メッセージの処理と書き込みを共通ヘルパーに委譲
+        self._process_and_write_messages(reader, writer, meta_info, conn_map)
