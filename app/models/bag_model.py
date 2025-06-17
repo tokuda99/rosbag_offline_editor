@@ -11,39 +11,6 @@ from fnmatch import fnmatch
 
 from rosbags.interfaces import ConnectionExtRosbag2
 
-class Qos:
-    """
-    QoS プロファイルを表すクラス。
-    """
-    def __init__(self, qos_str: str):
-        self.qos_str = qos_str
-        qos_dict = yaml.safe_load(qos_str)[0]
-        self.history_map = {
-            0: "SystemDefault",
-            1: "KeepLast",
-            2: "KeepAll",
-            3: "Unknown"
-        }
-        self.reliability_map = {
-            0: "SystemDefault",
-            1: "Reliable",
-            2: "BestEffort",
-            3: "Unknown"
-        }
-        self.durability_map = {
-            0: "SystemDefault",
-            1: "TransientLocal",
-            2: "Volatile",
-            3: "Unknown"
-        }
-        self.history = self.history_map.get(qos_dict.get("history", 3))
-        self.reliability = self.reliability_map.get(qos_dict.get("reliability", 3))
-        self.durability = self.durability_map.get(qos_dict.get("durability", 3))
-
-    def __str__(self):
-        return f"reliability: {self.reliability}, durability: {self.durability}"
-
-
 
 class BagModel:
     """

@@ -89,16 +89,17 @@ class BagEditorWindow(QMainWindow):
         # ヘッダーを設定
         headers = ["Topic", "MsgType", "Frame ID"]
         if extra_columns > 0:
-            headers.extend(["Serialization Format", "QoS History", "Qos Reliability", "Qos Durability"])
+            headers.extend(["Serialization Format", "Qos Durability", "QoS History", "Qos Reliability"])
         self.table.setHorizontalHeaderLabels(headers)
 
         self.table.setRowCount(len(conn_ids))
 
         # QoSオプションを定義
-        qos_history_options = ["SystemDefault", "KeepLast", "KeepAll", "Unknown"]
-        qos_reliability_options = ["SystemDefault", "Reliable", "BestEffort", "Unknown"]
-        qos_durability_options = ["SystemDefault", "TransientLocal", "Volatile", "Unknown"]
-
+        qos_durability_options = ["SYSTEM_DEFAULT", "TRANSIENT_LOCAL", "VOLATILE", "UNKNOWN", "BEST_AVAILABLE"]
+        qos_history_options = ["SYSTEM_DEFAULT", "KEEP_LAST", "KEEP_ALL", "UNKNOWN"]
+        qos_liveliness_options = ["SYSTEM_DEFAULT", "AUTOMATIC", "MANUAL_BY_NODE", "MANUAL_BY_TOPIC", "UNKNOWN", "BEST_AVAILABLE"]
+        qos_reliability_options = ["SYSTEM_DEFAULT", "RELIABLE", "BEST_EFFORT", "UNKNOWN", "BEST_AVAILABLE"]
+        
         for row, cid in enumerate(conn_ids):
             info = meta_info[cid]
             topic = info["topic"]
@@ -112,23 +113,24 @@ class BagEditorWindow(QMainWindow):
             if "serialization_format" in info:
                 self.table.setItem(row, 3, QTableWidgetItem(info["serialization_format"]))
 
+                # QoS Durability
+                durability_combo = QComboBox()
+                durability_combo.addItems(qos_durability_options)
+                durability_combo.setCurrentText(info["qos"].durability.name)
+                self.table.setCellWidget(row, 4, durability_combo)
+                
                 # QoS History
                 history_combo = QComboBox()
                 history_combo.addItems(qos_history_options)
-                history_combo.setCurrentText(info["qos"].history)
-                self.table.setCellWidget(row, 4, history_combo)
+                history_combo.setCurrentText(info["qos"].history.name)
+                self.table.setCellWidget(row, 5, history_combo)
 
                 # QoS Reliability
                 reliability_combo = QComboBox()
                 reliability_combo.addItems(qos_reliability_options)
-                reliability_combo.setCurrentText(info["qos"].reliability)
-                self.table.setCellWidget(row, 5, reliability_combo)
+                reliability_combo.setCurrentText(info["qos"].reliability.name)
+                self.table.setCellWidget(row, 6, reliability_combo)
 
-                # QoS Durability
-                durability_combo = QComboBox()
-                durability_combo.addItems(qos_durability_options)
-                durability_combo.setCurrentText(info["qos"].durability)
-                self.table.setCellWidget(row, 6, durability_combo)
 
         self.save_button.setEnabled(True)
 
