@@ -102,7 +102,7 @@ class BagModel:
         既存の bag (in_path) を読み込み、トピック/型情報を updated_meta に基づいて上書きしながら、
         指定の形式(ROS1 / ROS2)で out_path に保存する。
         """
-        with AnyReader([in_path]) as reader:
+        with AnyReader([in_path], default_typestore=typestore) as reader:
             if out_format == "ROS1":
                 with Rosbag1Writer(out_path) as writer:
                     self._write_bag1(reader, writer, updated_meta)
@@ -157,13 +157,13 @@ class BagModel:
             new_topic = meta_info[cid]["topic"]
             new_msgtype = meta_info[cid]["msgtype"]
             ext = cast('ConnectionExtRosbag2', connection.ext)
-            qos = meta_info[cid]["qos"].qos_str
+            qos = meta_info[cid]["qos"]
             conn_map[cid] = writer.add_connection(
                 topic=new_topic,
                 msgtype=new_msgtype,
                 typestore=reader.typestore,
                 serialization_format=ext.serialization_format,
-                offered_qos_profiles=qos
+                offered_qos_profiles=[qos]  # rosbag2は途中でQosが変わるためリストであるが初期Qosをとりあえず使用することにする。
             )
         # 2) メッセージ実体をコピー
         for conn, ts, data in reader.messages():

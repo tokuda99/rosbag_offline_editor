@@ -27,6 +27,36 @@ class BagMetaWorker(QObject):
         except Exception as e:
             self.finished_signal.emit(False, str(e))
 
+class BagSaveWorker(QObject):
+    """
+    バッグの保存という重い処理を「別スレッド」で実行する Worker。
+    """
+    # (success: bool, message: str) というシグナルを送る
+    finished_signal = pyqtSignal(bool, str)
+
+    def __init__(self, model, in_path, out_path, out_format, updated_meta):
+        super().__init__()
+        self.model = model
+        self.in_path = in_path
+        self.out_path = out_path
+        self.out_format = out_format
+        self.updated_meta = updated_meta
+
+    def run(self):
+        """
+        スレッド開始時に呼ばれる処理。
+        Model のメソッドを使ってバッグを保存する。
+        例外が起きたらシグナルを (False, エラーメッセージ) で返す。
+        """
+        try:
+            self.model.save_bag(
+                self.in_path, self.out_path, self.out_format, self.updated_meta
+            )
+            # 成功メッセージを付けてシグナルを発行
+            self.finished_signal.emit(True, f"Successfully saved to: {self.out_path}")
+        except Exception as e:
+            # 失敗メッセージを付けてシグナルを発行
+            self.finished_signal.emit(False, f"Failed to save: {e}")
 
 class BagEditorController:
     """
@@ -42,7 +72,7 @@ class BagEditorController:
 
         # View からの「ユーザー操作」シグナルを受け取って処理する
         self.view.request_open_bag.connect(self.open_bag_async)
-        self.view.request_save_bag.connect(self.save_bag)
+        self.view.request_save_bag.connect(self.save_bag_async)
 
         # 非同期処理用
         self.thread = None
@@ -110,20 +140,19 @@ class BagEditorController:
         self.view.update_meta_table(meta_info)
         self.view.show_info_message("Metadata loaded. Bag is closed now.")
 
-    def save_bag(self):
+    def save_bag_async(self): # save_bag からリネームし、非同期化
         """
         「Save Modified Bag」ボタン押下時の処理。
-        - ユーザに保存先(ROS1 or ROS2)を選択させる
-        - View からテーブル内容を取得
-        - Model の save_bag を呼び出して書き込む
+        - ユーザに保存先を選択させ、非同期で保存処理を開始する
         """
         if not self.model.bag_path:
+            self.view.show_error_message("Please open a bag file first.")
             return
 
         out_format = self.view.get_output_format()
         in_path = self.model.bag_path
 
-        # 出力パスをユーザーに指定させる
+        # 出力パスをユーザーに指定させる (GUI操作なのでメインスレッドで行う)
         if out_format == "ROS1":
             save_file, _ = QFileDialog.getSaveFileName(
                 self.view, "Save as ROS1 Bag", filter="ROS1 Bag (*.bag)"
@@ -131,22 +160,52 @@ class BagEditorController:
             if not save_file:
                 return
             out_path = Path(save_file)
-        else:
-            save_dir, _ = QFileDialog.getSaveFileName(
-                self.view, "Specify Directory Name for ROS2 Bag",
-                directory=str(Path.home() / "new_ros2_bag"),
-                filter="Directories (*)"
+        else: # ROS2
+            # ROS2の場合はディレクトリを選択させるのが一般的
+            save_dir = QFileDialog.getExistingDirectory(
+                self.view, "Select Directory to Save ROS2 Bag"
             )
             if not save_dir:
                 return
-            out_path = Path(save_dir)
+            # 新しいバッグ名（ディレクトリ名）を付ける
+            out_path = Path(save_dir) / (in_path.stem + "_modified")
+
 
         # View 側で編集された meta_info を再取得
         edited_meta = self.view.get_edited_meta_info(self.model.meta_info)
 
-        # モデルに書き込みを依頼
-        try:
-            self.model.save_bag(in_path, out_path, out_format, edited_meta)
-            self.view.show_info_message(f"Saved to: {out_path}")
-        except Exception as e:
-            self.view.show_error_message(f"Failed to save: {e}")
+        # プログレスダイアログを表示
+        self.view.show_progress_dialog("Saving bag...", "Please wait...")
+
+        # QThread と Worker を生成
+        self.save_thread = QThread()
+        self.save_worker = BagSaveWorker(
+            self.model, in_path, out_path, out_format, edited_meta
+        )
+        self.save_worker.moveToThread(self.save_thread)
+
+        # スレッド開始時に worker.run() を実行
+        self.save_thread.started.connect(self.save_worker.run)
+
+        # 保存完了シグナルを受け取ったらハンドラ呼び出し
+        self.save_worker.finished_signal.connect(self.on_save_finished)
+
+        # 終了時のクリーンアップ
+        self.save_worker.finished_signal.connect(self.save_thread.quit)
+        self.save_thread.finished.connect(self.save_worker.deleteLater)
+        self.save_thread.finished.connect(self.save_thread.deleteLater)
+
+        # スレッド起動
+        self.save_thread.start()
+
+    def on_save_finished(self, success: bool, message: str): # 新規追加
+        """
+        保存完了シグナルを受けたときの処理。
+        """
+        # プログレスダイアログを閉じる
+        self.view.close_progress_dialog()
+
+        if success:
+            self.view.show_info_message(message)
+        else:
+            self.view.show_error_message(message)
