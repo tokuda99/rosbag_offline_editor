@@ -10,7 +10,20 @@ import yaml
 from fnmatch import fnmatch
 
 from rosbags.interfaces import ConnectionExtRosbag2
+from rosbags.typesys import Stores, get_typestore, get_types_from_msg
 
+typestore = get_typestore(Stores.ROS2_JAZZY)
+pkg_share = Path(__file__).parent / 'types' / 'pandar_msgs' / 'msg'
+
+packet_def = (pkg_share / 'PandarPacket.msg').read_text(encoding='utf-8')
+typestore.register(
+    get_types_from_msg(packet_def, 'pandar_msgs/msg/PandarPacket')
+)
+
+scan_def = (pkg_share / 'PandarScan.msg').read_text(encoding='utf-8')
+typestore.register(
+    get_types_from_msg(scan_def, 'pandar_msgs/msg/PandarScan')
+)
 
 class BagModel:
     """
@@ -52,8 +65,7 @@ class BagModel:
         # 2) connections からメタ情報取得
         meta_info = {}
         frame_ids = set()
-        with AnyReader([bag_path]) as reader:
-            pass
+        with AnyReader([bag_path], default_typestore=typestore) as reader:
             for connection in reader.connections:
                 meta_info[connection.id] = {
                     "topic": connection.topic,
@@ -62,17 +74,21 @@ class BagModel:
                 if rosbag_version == "ROS2":
                     ext = cast('ConnectionExtRosbag2', connection.ext)
                     meta_info[connection.id]["serialization_format"] = ext.serialization_format
-                    qos = Qos(ext.offered_qos_profiles)
-                    meta_info[connection.id]["qos"] = qos
+                    meta_info[connection.id]["qos"] = ext.offered_qos_profiles[0] # rosbag2は途中でQosが変わるためリストであるが初期Qosをとりあえず使用することにする。
             
-            for i, (conn, ts, data) in enumerate(reader.messages()):
-                msg = reader.typestore.deserialize_cdr(data, conn.msgtype)
-                if header := getattr(msg, 'header', None):
-                    meta_info[conn.id]["frame_id"] = header.frame_id
-                    frame_ids.add(conn.id)
-                if len(frame_ids) == len(meta_info):
-                    break
+            
+                try:
+                    _conn, _ts, data = next(reader.messages(connections=[connection]))
+                except StopIteration:
+                    # まれにメッセージが 0 件の connection があるため
+                    continue
 
+                msg = reader.typestore.deserialize_cdr(data, connection.msgtype)
+
+                if hasattr(msg, "header"):
+                    # header があれば frame_id を追加
+                    meta_info[connection.id]["frame_id"] = msg.header.frame_id
+            
         return rosbag_version, meta_info
 
     def save_bag(
