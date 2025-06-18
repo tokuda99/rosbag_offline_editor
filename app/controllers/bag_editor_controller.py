@@ -73,11 +73,32 @@ class BagEditorController:
         # View からの「ユーザー操作」シグナルを受け取って処理する
         self.view.request_open_bag.connect(self.open_bag_async)
         self.view.request_save_bag.connect(self.save_bag_async)
+        self.view.request_detail_edit.connect(self.open_detail_editor)
 
         # 非同期処理用
         self.thread = None
         self.worker = None
+    def open_detail_editor(self, cid: int, msgtype: str):
+        """
+        ✅ 新規: Viewからの要求に応じて詳細編集ダイアログを開く(今回はスタブ)。
+        """
+        topic_name = self.model.meta_info[cid].get("topic", "N/A")
 
+        # 将来的にはここでメッセージ型に応じた専用ダイアログを開く
+        # dialog = CameraInfoEditorDialog(self.model, cid)
+        # if dialog.exec_():
+        #     # OKが押されたら編集結果をモデルに保存
+        #     self.model.detail_edit_data[cid] = dialog.get_data()
+
+        QMessageBox.information(
+            self.view,
+            "Detail Edit (Stub)",
+            f"Here, an editor for message type:\n\n"
+            f"  {msgtype}\n\n"
+            f"on topic:\n\n"
+            f"  {topic_name}\n\n"
+            f"would open. (Connection ID: {cid})"
+        )
     def open_bag_async(self):
         """
         Bag (ディレクトリ or .bagファイル) をユーザに選択させて、非同期でメタデータ読込。
@@ -130,14 +151,17 @@ class BagEditorController:
         rosbag_version, meta_info = result
         self.model.rosbag_version = rosbag_version
         self.model.meta_info = meta_info
-
-        # 今回読み込んだバッグのパスを保存しておく
-        # (後で Save のときに利用)
-        # Worker 内では self.model.bag_path へ代入してもよいですが、ここで明示的に行う方が分かりやすい
         self.model.bag_path = self.worker.path_obj
 
+        display_meta_info = {}
+        for cid, info in meta_info.items():
+            info_copy = info.copy()
+            # 「詳細編集可能か」のフラグをControllerが判断して追加
+            info_copy['is_detail_editable'] = self.model.is_detail_edit_supported(info.get("msgtype", ""))
+            display_meta_info[cid] = info_copy
+
         # View のテーブルを更新
-        self.view.update_meta_table(meta_info)
+        self.view.update_meta_table(display_meta_info)
         self.view.show_info_message("Metadata loaded. Bag is closed now.")
 
     def save_bag_async(self): # save_bag からリネームし、非同期化

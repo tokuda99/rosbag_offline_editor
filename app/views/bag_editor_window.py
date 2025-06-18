@@ -19,6 +19,7 @@ class BagEditorWindow(QMainWindow):
     """
     request_open_bag = pyqtSignal()
     request_save_bag = pyqtSignal()
+    request_detail_edit = pyqtSignal(int, str)
 
     def __init__(self):
         super().__init__()
@@ -110,9 +111,11 @@ class BagEditorWindow(QMainWindow):
         column_count = 4 + (4 if has_ros2_info else 0)
         self.table.setColumnCount(column_count)
         
-        headers = ["Include", "Topic", "MsgType", "Frame ID"]
+        headers = ["Include", "Detail Edit", "Topic", "MsgType", "Frame ID"]
         if has_ros2_info:
             headers.extend(["Serialization Format", "QoS Durability", "QoS History", "QoS Reliability"])
+            
+        self.table.setColumnCount(len(headers))
         self.table.setHorizontalHeaderLabels(headers)
         self.table.setRowCount(len(conn_ids))
 
@@ -127,42 +130,62 @@ class BagEditorWindow(QMainWindow):
             checkbox_item = QTableWidgetItem()
             checkbox_item.setFlags(Qt.ItemIsUserCheckable | Qt.ItemIsEnabled)
             checkbox_item.setCheckState(Qt.Checked)
-            self.table.setItem(row, 0, checkbox_item)
+            self.table.setItem(row, headers.index("Include"), checkbox_item)
+            
+            
+            # 列 "Detail Edit": 詳細編集ボタン
+            if info.get('is_detail_editable', False):
+                edit_button = QPushButton("✏️ Edit")
+                msgtype = info.get("msgtype", "")
+                edit_button.clicked.connect(
+                    lambda checked, cid=cid, msgtype=msgtype: self.request_detail_edit.emit(cid, msgtype)
+                )
+                self.table.setCellWidget(row, headers.index("Detail Edit"), edit_button)
+
             
             # 列1-3: 基本情報
-            self.table.setItem(row, 1, QTableWidgetItem(info.get("topic", "")))
-            self.table.setItem(row, 2, QTableWidgetItem(info.get("msgtype", "")))
+            self.table.setItem(row, headers.index("Topic"), QTableWidgetItem(info.get("topic", "")))
+            msg_type_item = QTableWidgetItem(info.get("msgtype", ""))
+            msg_type_item.setFlags(msg_type_item.flags() & ~Qt.ItemIsEditable)
+            self.table.setItem(row, headers.index("MsgType"), msg_type_item)
             
-            frame_id_item = QTableWidgetItem(info.get("frame_id", ""))
+            frame_id_item = QTableWidgetItem(info.get("frame_id", "N/A"))
+            
             # frame_idが無いトピックは編集不可に
             if "frame_id" not in info:
                 frame_id_item.setFlags(frame_id_item.flags() & ~Qt.ItemIsEditable)
                 frame_id_item.setBackground(Qt.lightGray)
-            self.table.setItem(row, 3, frame_id_item)
+            self.table.setItem(row, headers.index("Frame ID"), frame_id_item)
 
             # 列4-7: ROS2追加情報
             if has_ros2_info and "serialization_format" in info:
                 sf_item = QTableWidgetItem(info["serialization_format"])
                 sf_item.setFlags(sf_item.flags() & ~Qt.ItemIsEditable) # 編集不可
-                self.table.setItem(row, 4, sf_item)
+                self.table.setItem(row, headers.index("Serialization Format"), sf_item)
 
                 qos = info.get("qos")
                 if qos:
                     # Durability
                     durability_combo = QComboBox()
                     durability_combo.addItems(qos_durability_options)
-                    durability_combo.setCurrentText(qos.durability.name)
-                    self.table.setCellWidget(row, 5, durability_combo)
+                    if hasattr(qos, 'durability'):
+                        durability_combo.setCurrentText(qos.durability.name)
+                    self.table.setCellWidget(row, headers.index("QoS Durability"), durability_combo)
+                    
                     # History
                     history_combo = QComboBox()
                     history_combo.addItems(qos_history_options)
-                    history_combo.setCurrentText(qos.history.name)
-                    self.table.setCellWidget(row, 6, history_combo)
+                    if hasattr(qos, 'history'):
+                        history_combo.setCurrentText(qos.history.name)
+                    self.table.setCellWidget(row, headers.index("QoS History"), history_combo)
+                    
                     # Reliability
                     reliability_combo = QComboBox()
                     reliability_combo.addItems(qos_reliability_options)
-                    reliability_combo.setCurrentText(qos.reliability.name)
-                    self.table.setCellWidget(row, 7, reliability_combo)
+                    if hasattr(qos, 'reliability'):
+                        reliability_combo.setCurrentText(qos.reliability.name)
+                    self.table.setCellWidget(row, headers.index("QoS Reliability"), reliability_combo)
+
 
         # シグナルのブロックを解除し、Saveボタンの状態を初期化
         self.table.blockSignals(False)
@@ -174,16 +197,16 @@ class BagEditorWindow(QMainWindow):
         """
         edited_meta = {}
         conn_ids = list(original_meta_info.keys())
-        
+        headers = [self.table.horizontalHeaderItem(i).text() for i in range(self.table.columnCount())]
+
         for row, cid in enumerate(conn_ids):
-            if self.table.item(row, 0).checkState() == Qt.Checked:
+            if self.table.item(row, headers.index("Include")).checkState() == Qt.Checked:
                 info_copy = original_meta_info[cid].copy()
-                info_copy["topic"] = self.table.item(row, 1).text()
-                info_copy["msgtype"] = self.table.item(row, 2).text()
+                info_copy["topic"] = self.table.item(row, headers.index("Topic")).text()
                 
                 # frame_idが存在すれば更新
                 if "frame_id" in info_copy:
-                    info_copy["frame_id"] = self.table.item(row, 3).text()
+                    info_copy["frame_id"] = self.table.item(row, headers.index("Frame ID")).text()
                 
                 # QoSが存在すれば更新 (今回は実装省略)
                 if "qos" in info_copy:
@@ -203,9 +226,10 @@ class BagEditorWindow(QMainWindow):
         """
         読み込み中などで操作をブロックしたいときに表示するプログレスダイアログ。
         """
-        self.progress_dialog = QProgressDialog(label_text, cancel_text, 0, 0, self)
-        self.progress_dialog.setWindowModality(Qt.WindowModal)
-        self.progress_dialog.setValue(0)  # 進捗バー不定状態
+        if not self.progress_dialog:
+            self.progress_dialog = QProgressDialog(label_text, cancel_text, 0, 0, self)
+            self.progress_dialog.setWindowModality(Qt.WindowModal)
+            self.progress_dialog.setValue(0)  # 進捗バー不定状態
         # self.progress_dialog.canceled.connect(...) -> キャンセル処理はお好みで
         self.progress_dialog.show()
 

@@ -29,11 +29,23 @@ class BagModel:
     """
     rosbag(ROS1/ROS2) のメタ情報や実際の読み込み・書き込み処理を担う Model。
     """
-
+    # ✅ 新規: 詳細編集をサポートするメッセージ型のリスト
+    SUPPORTED_DETAIL_EDIT_TYPES = [
+        "sensor_msgs/msg/CameraInfo",
+        "tf2_msgs/msg/TFMessage",  # /tf_static は通常この型
+    ]
+    
     def __init__(self):
         self.bag_path: Path = None
         self.rosbag_version: str = None
         self.meta_info: Dict[int, Dict[str, Any]] = {}
+        self.detail_edit_data: Dict[int, Dict[str, Any]] = {}
+
+    def is_detail_edit_supported(self, msgtype: str) -> bool:
+        """
+        ✅ 新規: 指定されたメッセージ型が詳細編集をサポートしているか判定する。
+        """
+        return msgtype in self.SUPPORTED_DETAIL_EDIT_TYPES
 
     def load_bag_metadata(self, path_obj: Path) -> Tuple[bool, Dict[int, Dict[str, Any]]]:
         """
@@ -120,19 +132,45 @@ class BagModel:
         for conn, ts, data in reader.messages(connections=target_connections):
             cid = conn.id
             wconn = conn_map[cid]
-            
-            # frame_idの書き換えが必要かチェック
-            if "frame_id" in meta_info[cid]:
-                try:
+            msg_modified = False
+
+            try:
+                # メッセージの書き換えが必要な場合のみデシリアライズ
+                needs_deserialize = ("frame_id" in meta_info[cid]) or (cid in self.detail_edit_data)
+
+                if needs_deserialize:
                     msg = reader.typestore.deserialize_cdr(data, conn.msgtype)
-                    if hasattr(msg, 'header') and hasattr(msg.header, 'frame_id'):
+
+                    # 1. frame_idの書き換え
+                    if "frame_id" in meta_info[cid] and hasattr(msg, 'header') and hasattr(msg.header, 'frame_id'):
                         new_frame_id = meta_info[cid]["frame_id"]
                         if msg.header.frame_id != new_frame_id:
                             msg.header.frame_id = new_frame_id
-                            # 変更があった場合、メッセージを再シリアライズ
-                            data = reader.typestore.serialize_cdr(msg, conn.msgtype)
-                except Exception as e:
-                    print(f"Warning: Could not modify frame_id for topic {conn.topic}. Error: {e}")
+                            msg_modified = True
+                    
+                    # ✅ 2. 詳細編集データの適用 (将来の拡張ポイント)
+                    if cid in self.detail_edit_data:
+                        edit_info = self.detail_edit_data[cid]
+                        msgtype = conn.msgtype
+
+                        # --- ここにメッセージ型ごとの編集ロジックを実装 ---
+                        if msgtype == "sensor_msgs/msg/CameraInfo" and edit_info['type'] == 'camera_info':
+                            # 例: msg.k = edit_info['data']['k'] ...
+                            print(f"Applying detailed edits for CameraInfo on topic {conn.topic}")
+                            msg_modified = True
+                        
+                        elif msgtype == "tf2_msgs/msg/TFMessage" and edit_info['type'] == 'tf_static':
+                            # 例: msg.transforms を削除、変更、追加する ...
+                            print(f"Applying detailed edits for TFMessage on topic {conn.topic}")
+                            msg_modified = True
+                        # ----------------------------------------------------
+
+                    # メッセージが変更されていたら再シリアライズ
+                    if msg_modified:
+                        data = reader.typestore.serialize_cdr(msg, conn.msgtype)
+
+            except Exception as e:
+                print(f"Warning: Could not process message for topic {conn.topic}. Error: {e}")
             
             writer.write(wconn, ts, data)
 
@@ -172,6 +210,7 @@ class BagModel:
             if any(fnmatch(connection.msgtype, pat) for pat in filtered_patterns):
                 continue
             
+            qos = None
             ext = cast('ConnectionExtRosbag2', connection.ext)
             qos = info.get("qos", ext.offered_qos_profiles[0] if ext.offered_qos_profiles else None)
             conn_map[cid] = writer.add_connection(
