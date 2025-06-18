@@ -3,6 +3,7 @@ from PyQt5.QtCore import QObject, QThread, pyqtSignal
 from PyQt5.QtWidgets import QFileDialog, QProgressDialog, QMessageBox, QDialog
 from typing import Any
 from app.views.camera_info_editor_dialog import CameraInfoEditorDialog
+from app.views.tf_static_editor_dialog import TFStaticEditorDialog
 
 
 class BagMetaWorker(QObject):
@@ -110,8 +111,24 @@ class BagEditorController:
                     self.view.show_info_message("CameraInfo updated. Changes will be applied on save.")
         
         elif msgtype == "tf2_msgs/msg/TFMessage":
-            # 将来のTF編集機能のためのスタブ
-            QMessageBox.information(self.view, "Not Implemented", "Editor for TFMessage is not yet implemented.")
+            composite_msg = self.model.get_all_tf_static_transforms(cid)
+            # /tf_staticはメッセージが空の場合もあるので、Noneでも許容
+            if composite_msg is None or not hasattr(composite_msg, 'transforms'):
+                # 空のTFMessageオブジェクトを生成して渡す
+                from types import SimpleNamespace
+                composite_msg = SimpleNamespace(transforms=[])
+            
+            dialog = TFStaticEditorDialog(composite_msg, self.model.thumbnail_pointclouds, self.model.meta_info, self.view)
+
+            if dialog.exec_() == QDialog.Accepted:
+                edited_transforms = dialog.edited_data
+                if edited_transforms is not None:
+                    self.model.detail_edit_data[cid] = {
+                        'type': 'tf_static',
+                        'data': edited_transforms # transformのリストを保存
+                    }
+                    self.view.show_info_message("TF static updated. Changes will be applied on save.")
+        
         
         else:
             self.view.show_error_message(f"No editor available for {msgtype}")

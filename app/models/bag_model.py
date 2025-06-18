@@ -1,19 +1,25 @@
+from fnmatch import fnmatch
 from pathlib import Path
-from typing import Dict, Any, Tuple
+from types import SimpleNamespace
+from typing import TYPE_CHECKING, Any, Dict, Tuple, cast
+
+import numpy as np
+import yaml
 
 # rosbags関連
 from rosbags.highlevel import AnyReader
+from rosbags.interfaces import Connection, ConnectionExtRosbag2
 from rosbags.rosbag1 import Writer as Rosbag1Writer
 from rosbags.rosbag2 import Writer as Rosbag2Writer
-from typing import TYPE_CHECKING, cast
-import yaml
-from fnmatch import fnmatch
+from rosbags.typesys import Stores, get_types_from_msg, get_typestore
+from rosbags.typesys.types import builtin_interfaces__msg__Time as Time
+from rosbags.typesys.types import geometry_msgs__msg__Quaternion as Quaternion
+from rosbags.typesys.types import geometry_msgs__msg__TransformStamped as TransformStamped
+from rosbags.typesys.types import geometry_msgs__msg__Vector3 as Vector3
+from rosbags.typesys.types import std_msgs__msg__Header as Header
+from rosbags.typesys.types import tf2_msgs__msg__TFMessage as TFMessage
 
-from rosbags.interfaces import Connection, ConnectionExtRosbag2
-from rosbags.typesys import Stores, get_typestore, get_types_from_msg
-
-import numpy as np
-from app.utils.thumbnail_converters import THUMBNAIL_CONVERTERS
+from app.utils.thumbnail_converters import IMAGE_THUMBNAIL_CONVERTERS, POINTCLOUD_CONVERTERS
 
 typestore = get_typestore(Stores.ROS2_JAZZY)
 pkg_share = Path(__file__).parent / 'types' / 'pandar_msgs' / 'msg'
@@ -37,16 +43,14 @@ class BagModel:
         "sensor_msgs/msg/CameraInfo",
         "tf2_msgs/msg/TFMessage",  # /tf_static は通常この型
     ]
-    IMAGE_TOPIC_TYPES = [
-        'sensor_msgs/msg/Image',
-        'sensor_msgs/msg/CompressedImage'
-    ]
+
     def __init__(self):
         self.bag_path: Path = None
         self.rosbag_version: str = None
         self.meta_info: Dict[int, Dict[str, Any]] = {}
         self.detail_edit_data: Dict[int, Dict[str, Any]] = {}
         self.thumbnail_images: Dict[str, np.ndarray] = {}
+        self.thumbnail_pointclouds: Dict[str, np.ndarray] = {}
 
     def get_first_message(self, connection_id: int):
         """
@@ -73,7 +77,53 @@ class BagModel:
             except Exception as e:
                 print(f"Error getting first message for cid {connection_id}: {e}")
                 return None
+    def get_all_tf_static_transforms(self, connection_id: int):
+        """
+        ✅ 修正: 指定したconnectionの全メッセージを読み込むが、
+        すでに追加済みのTFが現れた時点で処理を打ち切るように最適化。
+        """
+        if not self.bag_path:
+            return None
 
+        all_transforms = []
+        # ✅ 追加済みTFリンクを記録するset (parent, child)
+        seen_tf_links = set()
+        # ✅ 外側のループを抜けるためのフラグ
+        stop_processing = False
+
+        with AnyReader([self.bag_path], default_typestore=typestore) as reader:
+            target_connection = next((c for c in reader.connections if c.id == connection_id), None)
+            if not target_connection:
+                return None
+            
+            for conn, ts, data in reader.messages(connections=[target_connection]):
+                try:
+                    msg = reader.typestore.deserialize_cdr(data, conn.msgtype)
+                    if not hasattr(msg, 'transforms'):
+                        continue
+
+                    for tf in msg.transforms:
+                        key = (tf.header.frame_id, tf.child_frame_id)
+                        
+                        # ✅ このTFリンクがすでに追加済みかチェック
+                        if key in seen_tf_links:
+                            # 見つかった場合、ユニークなTFは全て読み終わったと判断
+                            stop_processing = True
+                            break # 内側のループを抜ける
+                        
+                        # 新しいTFリンクなので追加
+                        seen_tf_links.add(key)
+                        all_transforms.append(tf)
+
+                except Exception as e:
+                    print(f"Warning: Could not process a TF message. Error: {e}")
+                
+                # ✅ フラグが立っていたら外側のループも抜ける
+                if stop_processing:
+                    break
+        
+        composite_tf_message = SimpleNamespace(transforms=all_transforms)
+        return composite_tf_message
     def is_detail_edit_supported(self, msgtype: str) -> bool:
         """
         ✅ 新規: 指定されたメッセージ型が詳細編集をサポートしているか判定する。
@@ -109,8 +159,11 @@ class BagModel:
 
         # 2) connections からメタ情報取得
         meta_info = {}
-        sampled_topics = set()
-        self.thumbnail_images.clear() 
+        self.thumbnail_images.clear()
+        self.thumbnail_pointclouds.clear() # ✅ クリア処理を追加
+        sampled_image_topics = set()
+        sampled_pc_topics = set()
+        
         with AnyReader([bag_path], default_typestore=typestore) as reader:
             for connection in reader.connections:
                 topic_name = connection.topic
@@ -137,13 +190,19 @@ class BagModel:
                     # header があれば frame_id を追加
                     meta_info[connection.id]["frame_id"] = msg.header.frame_id
             
-                if msgtype in THUMBNAIL_CONVERTERS and topic_name not in self.thumbnail_images:
-                    # 適切な変換関数を取得して実行
-                    converter_func = THUMBNAIL_CONVERTERS[msgtype]
+                if msgtype in IMAGE_THUMBNAIL_CONVERTERS and topic_name not in sampled_image_topics:
+                    converter_func = IMAGE_THUMBNAIL_CONVERTERS[msgtype]
                     image_np = converter_func(msg)
-                    
                     if image_np is not None:
                         self.thumbnail_images[topic_name] = image_np
+                        sampled_image_topics.add(topic_name)
+
+                if msgtype in POINTCLOUD_CONVERTERS and topic_name not in sampled_pc_topics:
+                    converter_func = POINTCLOUD_CONVERTERS[msgtype]
+                    pc_np = converter_func(msg)
+                    if pc_np is not None:
+                        self.thumbnail_pointclouds[topic_name] = pc_np
+                        sampled_pc_topics.add(topic_name)
 
         return rosbag_version, meta_info
 
@@ -209,9 +268,25 @@ class BagModel:
                             msg.p = np.array(edit_data['p'], dtype=np.float64)
                             msg_modified = True
                         
-                        elif msgtype == "tf2_msgs/msg/TFMessage" and edit_info['type'] == 'tf_static':
-                            # 例: msg.transforms を削除、変更、追加する ...
-                            print(f"Applying detailed edits for TFMessage on topic {conn.topic}")
+                        elif msgtype == 'tf2_msgs/msg/TFMessage' and edit_info['type'] == 'tf_static':
+                            # 新しいtransformのリストを作成
+                            new_tf_list = []
+                            for tf_data in edit_info['data']:
+                                # ダイアログから来たデータ (SimpleNamespace) をrosbagsの型に変換
+                                h = tf_data.header
+                                t = tf_data.transform
+                                new_tf = TransformStamped(
+                                    header=Header(
+                                        stamp=Time(sec=h.stamp.sec, nanosec=h.stamp.nanosec),
+                                        frame_id=h.frame_id
+                                    ),
+                                    child_frame_id=tf_data.child_frame_id,
+                                    transform=t
+                                )
+                                new_tf_list.append(new_tf)
+
+                            # メッセージのtransformsを丸ごと入れ替える
+                            msg.transforms = np.array(new_tf_list)
                             msg_modified = True
                         # ----------------------------------------------------
 

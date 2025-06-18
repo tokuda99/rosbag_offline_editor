@@ -90,13 +90,35 @@ def _convert_compressed_image_to_bgr(msg):
     np_arr = np.frombuffer(msg.data, np.uint8)
     return cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
 
+def _convert_pointcloud2_to_xyz(msg):
+    """
+    sensor_msgs/msg/PointCloud2 を (N, 3) のXYZ座標配列に変換する。
+    """
+    offsets = _parse_pointcloud2_field_offset(msg.fields)
+    x_offset, y_offset, z_offset = offsets.get('x'), offsets.get('y'), offsets.get('z')
+
+    if x_offset is None or y_offset is None or z_offset is None:
+        return None
+
+    points = np.zeros((msg.width * msg.height, 3), dtype=np.float32)
+    point_step = msg.point_step
+    data = msg.data
+    
+    for i in range(len(points)):
+        base_offset = i * point_step
+        points[i, 0] = struct.unpack_from('<f', data, base_offset + x_offset)[0]
+        points[i, 1] = struct.unpack_from('<f', data, base_offset + y_offset)[0]
+        points[i, 2] = struct.unpack_from('<f', data, base_offset + z_offset)[0]
+        
+    return points
 
 # --- ディスパッチャ辞書 ---
 
-THUMBNAIL_CONVERTERS = {
+IMAGE_THUMBNAIL_CONVERTERS = {
     'sensor_msgs/msg/Image': _convert_image_msg_to_bgr,
     'sensor_msgs/msg/CompressedImage': _convert_compressed_image_to_bgr,
-    'sensor_msgs/msg/PointCloud2': _convert_pointcloud2_to_bgr,
-    # 将来、新しい型を追加する場合はここに関数を追加する
-    # 'sensor_msgs/msg/LaserScan': _convert_laserscan_to_bgr,
+    # 'sensor_msgs/msg/PointCloud2': _convert_pointcloud2_to_bgr,
+}
+POINTCLOUD_CONVERTERS = {
+    'sensor_msgs/msg/PointCloud2': _convert_pointcloud2_to_xyz,
 }
