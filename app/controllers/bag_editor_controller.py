@@ -80,6 +80,7 @@ class BagEditorController:
         # 非同期処理用
         self.thread = None
         self.worker = None
+
     def open_detail_editor(self, cid: int, msgtype: str):
         """
         ✅ 修正: メッセージ型に応じて専用の編集ダイアログを開く
@@ -96,7 +97,7 @@ class BagEditorController:
                 return
 
             # 2. 編集ダイアログを作成し、現在の値を渡して開く
-            dialog = CameraInfoEditorDialog(current_msg, self.view)
+            dialog = CameraInfoEditorDialog(current_msg, self.model.thumbnail_images, self.view)
             
             # 3. ダイアログが「OK」で閉じられたら、編集結果をモデルに保存
             if dialog.exec_() == QDialog.Accepted:

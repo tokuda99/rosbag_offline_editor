@@ -13,6 +13,7 @@ from rosbags.interfaces import Connection, ConnectionExtRosbag2
 from rosbags.typesys import Stores, get_typestore, get_types_from_msg
 
 import numpy as np
+from app.utils.thumbnail_converters import THUMBNAIL_CONVERTERS
 
 typestore = get_typestore(Stores.ROS2_JAZZY)
 pkg_share = Path(__file__).parent / 'types' / 'pandar_msgs' / 'msg'
@@ -36,12 +37,16 @@ class BagModel:
         "sensor_msgs/msg/CameraInfo",
         "tf2_msgs/msg/TFMessage",  # /tf_static は通常この型
     ]
-    
+    IMAGE_TOPIC_TYPES = [
+        'sensor_msgs/msg/Image',
+        'sensor_msgs/msg/CompressedImage'
+    ]
     def __init__(self):
         self.bag_path: Path = None
         self.rosbag_version: str = None
         self.meta_info: Dict[int, Dict[str, Any]] = {}
         self.detail_edit_data: Dict[int, Dict[str, Any]] = {}
+        self.thumbnail_images: Dict[str, np.ndarray] = {}
 
     def get_first_message(self, connection_id: int):
         """
@@ -68,6 +73,7 @@ class BagModel:
             except Exception as e:
                 print(f"Error getting first message for cid {connection_id}: {e}")
                 return None
+
     def is_detail_edit_supported(self, msgtype: str) -> bool:
         """
         ✅ 新規: 指定されたメッセージ型が詳細編集をサポートしているか判定する。
@@ -103,12 +109,15 @@ class BagModel:
 
         # 2) connections からメタ情報取得
         meta_info = {}
-        frame_ids = set()
+        sampled_topics = set()
+        self.thumbnail_images.clear() 
         with AnyReader([bag_path], default_typestore=typestore) as reader:
             for connection in reader.connections:
+                topic_name = connection.topic
+                msgtype = connection.msgtype
                 meta_info[connection.id] = {
-                    "topic": connection.topic,
-                    "msgtype": connection.msgtype
+                    "topic": topic_name,
+                    "msgtype": msgtype,
                 }
                 if rosbag_version == "ROS2":
                     ext = cast('ConnectionExtRosbag2', connection.ext)
@@ -128,6 +137,14 @@ class BagModel:
                     # header があれば frame_id を追加
                     meta_info[connection.id]["frame_id"] = msg.header.frame_id
             
+                if msgtype in THUMBNAIL_CONVERTERS and topic_name not in self.thumbnail_images:
+                    # 適切な変換関数を取得して実行
+                    converter_func = THUMBNAIL_CONVERTERS[msgtype]
+                    image_np = converter_func(msg)
+                    
+                    if image_np is not None:
+                        self.thumbnail_images[topic_name] = image_np
+
         return rosbag_version, meta_info
 
     def save_bag(
