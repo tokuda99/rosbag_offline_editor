@@ -136,13 +136,11 @@ class BagEditorController:
         """
         Bag (ディレクトリ or .bagファイル) をユーザに選択させて、非同期でメタデータ読込。
         """
-        path = QFileDialog.getExistingDirectory(self.view, "Select Bag Directory")
-        if not path:
-            # ディレクトリが選ばれていなければ、.bag ファイル選択を試みる
-            path, _ = QFileDialog.getOpenFileName(
-                self.view, "Select .bag File", filter="Bag Files (*.bag)"
+        path, _ = QFileDialog.getOpenFileName(
+                self.view, "Select .bag File", filter="Bag Files (*.bag *.db3 *.mcap);;All Files (*)"
             )
-            if not path:
+
+        if not path:
                 return
         path_obj = Path(path)
 
@@ -184,7 +182,6 @@ class BagEditorController:
         rosbag_version, meta_info = result
         self.model.rosbag_version = rosbag_version
         self.model.meta_info = meta_info
-        self.model.bag_path = self.worker.path_obj
 
         display_meta_info = {}
         for cid, info in meta_info.items():
