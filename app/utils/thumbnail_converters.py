@@ -23,8 +23,6 @@ def _convert_pointcloud2_to_bgr(msg):
     if x_offset is None or y_offset is None or z_offset is None:
         return None
 
-    # (点群データの読み込み、フィルタリング、座標変換のロジックは変更なし)
-    # ...
     points = []
     for i in range(msg.width * msg.height):
         base_offset = i * msg.point_step
@@ -60,7 +58,6 @@ def _convert_pointcloud2_to_bgr(msg):
 
     image = np.zeros((*img_size, 3), dtype=np.uint8)
     
-    # ✅【修正箇所】 color_image の形状を (N, 1, 3) から (N, 3) に変更してから代入する
     image[y_img, x_img] = color_image.reshape(-1, 3)
     
     return image
@@ -90,26 +87,43 @@ def _convert_compressed_image_to_bgr(msg):
     np_arr = np.frombuffer(msg.data, np.uint8)
     return cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
 
-def _convert_pointcloud2_to_xyz(msg):
+def _convert_pointcloud2_to_numpy(msg):
     """
-    sensor_msgs/msg/PointCloud2 を (N, 3) のXYZ座標配列に変換する。
+    sensor_msgs/msg/PointCloud2 を (N, 3) のXYZ座標配列、
+    または (N, 4) の XYZ+Intensity 配列に変換する。
     """
     offsets = _parse_pointcloud2_field_offset(msg.fields)
-    x_offset, y_offset, z_offset = offsets.get('x'), offsets.get('y'), offsets.get('z')
+    x_offset = offsets.get('x')
+    y_offset = offsets.get('y')
+    z_offset = offsets.get('z')
+    intensity_offset = offsets.get('intensity')
 
     if x_offset is None or y_offset is None or z_offset is None:
         return None
 
-    points = np.zeros((msg.width * msg.height, 3), dtype=np.float32)
+    point_count = msg.width * msg.height
     point_step = msg.point_step
     data = msg.data
     
-    for i in range(len(points)):
+    has_intensity = intensity_offset is not None
+    if has_intensity:
+        points = np.zeros((point_count, 4), dtype=np.float32)
+    else:
+        points = np.zeros((point_count, 3), dtype=np.float32)
+
+    for i in range(point_count):
         base_offset = i * point_step
         points[i, 0] = struct.unpack_from('<f', data, base_offset + x_offset)[0]
         points[i, 1] = struct.unpack_from('<f', data, base_offset + y_offset)[0]
         points[i, 2] = struct.unpack_from('<f', data, base_offset + z_offset)[0]
-        
+        if has_intensity:
+            try:
+                # 一般的な float32 の intensity を想定
+                points[i, 3] = struct.unpack_from('<f', data, base_offset + intensity_offset)[0]
+            except struct.error:
+                # 他のデータ型 (例: uint8) の場合は要調整
+                points[i, 3] = 0.0
+                
     return points
 
 # --- ディスパッチャ辞書 ---
@@ -120,5 +134,5 @@ IMAGE_THUMBNAIL_CONVERTERS = {
     # 'sensor_msgs/msg/PointCloud2': _convert_pointcloud2_to_bgr,
 }
 POINTCLOUD_CONVERTERS = {
-    'sensor_msgs/msg/PointCloud2': _convert_pointcloud2_to_xyz,
+    'sensor_msgs/msg/PointCloud2': _convert_pointcloud2_to_numpy,
 }
