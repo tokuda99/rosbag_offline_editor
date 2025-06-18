@@ -12,6 +12,8 @@ from fnmatch import fnmatch
 from rosbags.interfaces import Connection, ConnectionExtRosbag2
 from rosbags.typesys import Stores, get_typestore, get_types_from_msg
 
+import numpy as np
+
 typestore = get_typestore(Stores.ROS2_JAZZY)
 pkg_share = Path(__file__).parent / 'types' / 'pandar_msgs' / 'msg'
 
@@ -41,6 +43,31 @@ class BagModel:
         self.meta_info: Dict[int, Dict[str, Any]] = {}
         self.detail_edit_data: Dict[int, Dict[str, Any]] = {}
 
+    def get_first_message(self, connection_id: int):
+        """
+        ✅ 新規: 指定したconnectionの最初のメッセージを取得してデシリアライズする
+        """
+        if not self.bag_path:
+            return None
+            
+        with AnyReader([self.bag_path], default_typestore=typestore) as reader:
+            target_connection = next((c for c in reader.connections if c.id == connection_id), None)
+
+            if not target_connection:
+                print(f"Error: Connection with id {connection_id} not found.")
+                return None
+            
+            try:
+                # 最初のメッセージだけを読み込む
+                conn, ts, data = next(reader.messages(connections=[target_connection]))
+                msg = reader.typestore.deserialize_cdr(data, conn.msgtype)
+                return msg
+            except StopIteration:
+                # メッセージが空のトピック
+                return None
+            except Exception as e:
+                print(f"Error getting first message for cid {connection_id}: {e}")
+                return None
     def is_detail_edit_supported(self, msgtype: str) -> bool:
         """
         ✅ 新規: 指定されたメッセージ型が詳細編集をサポートしているか判定する。
@@ -155,8 +182,14 @@ class BagModel:
 
                         # --- ここにメッセージ型ごとの編集ロジックを実装 ---
                         if msgtype == "sensor_msgs/msg/CameraInfo" and edit_info['type'] == 'camera_info':
-                            # 例: msg.k = edit_info['data']['k'] ...
-                            print(f"Applying detailed edits for CameraInfo on topic {conn.topic}")
+                            edit_data = edit_info['data']
+                            msg.width = np.uint32(edit_data['width'])
+                            msg.height = np.uint32(edit_data['height'])
+                            msg.distortion_model = edit_data['distortion_model']
+                            msg.k = np.array(edit_data['k'], dtype=np.float64)
+                            msg.d = np.array(edit_data['d'], dtype=np.float64)
+                            msg.r = np.array(edit_data['r'], dtype=np.float64)
+                            msg.p = np.array(edit_data['p'], dtype=np.float64)
                             msg_modified = True
                         
                         elif msgtype == "tf2_msgs/msg/TFMessage" and edit_info['type'] == 'tf_static':

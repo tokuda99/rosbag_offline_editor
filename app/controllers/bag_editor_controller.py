@@ -1,7 +1,9 @@
 from pathlib import Path
 from PyQt5.QtCore import QObject, QThread, pyqtSignal
-from PyQt5.QtWidgets import QFileDialog, QProgressDialog, QMessageBox
+from PyQt5.QtWidgets import QFileDialog, QProgressDialog, QMessageBox, QDialog
 from typing import Any
+from app.views.camera_info_editor_dialog import CameraInfoEditorDialog
+
 
 class BagMetaWorker(QObject):
     """
@@ -80,25 +82,38 @@ class BagEditorController:
         self.worker = None
     def open_detail_editor(self, cid: int, msgtype: str):
         """
-        ✅ 新規: Viewからの要求に応じて詳細編集ダイアログを開く(今回はスタブ)。
+        ✅ 修正: メッセージ型に応じて専用の編集ダイアログを開く
         """
-        topic_name = self.model.meta_info[cid].get("topic", "N/A")
+        if msgtype == "sensor_msgs/msg/CameraInfo":
+            # 1. 編集対象の現在のメッセージ内容を取得
+            current_msg = self.model.get_first_message(cid)
+            if current_msg is None:
+                # トピックが空などの理由でメッセージが取得できなかった場合
+                self.view.show_warning_message(
+                    f"Could not retrieve a message from topic '{self.model.meta_info[cid]['topic']}'.\n"
+                    "Cannot open editor for an empty topic."
+                )
+                return
 
-        # 将来的にはここでメッセージ型に応じた専用ダイアログを開く
-        # dialog = CameraInfoEditorDialog(self.model, cid)
-        # if dialog.exec_():
-        #     # OKが押されたら編集結果をモデルに保存
-        #     self.model.detail_edit_data[cid] = dialog.get_data()
-
-        QMessageBox.information(
-            self.view,
-            "Detail Edit (Stub)",
-            f"Here, an editor for message type:\n\n"
-            f"  {msgtype}\n\n"
-            f"on topic:\n\n"
-            f"  {topic_name}\n\n"
-            f"would open. (Connection ID: {cid})"
-        )
+            # 2. 編集ダイアログを作成し、現在の値を渡して開く
+            dialog = CameraInfoEditorDialog(current_msg, self.view)
+            
+            # 3. ダイアログが「OK」で閉じられたら、編集結果をモデルに保存
+            if dialog.exec_() == QDialog.Accepted:
+                edited_data = dialog.edited_data
+                if edited_data:
+                    self.model.detail_edit_data[cid] = {
+                        'type': 'camera_info',
+                        'data': edited_data
+                    }
+                    self.view.show_info_message("CameraInfo updated. Changes will be applied on save.")
+        
+        elif msgtype == "tf2_msgs/msg/TFMessage":
+            # 将来のTF編集機能のためのスタブ
+            QMessageBox.information(self.view, "Not Implemented", "Editor for TFMessage is not yet implemented.")
+        
+        else:
+            self.view.show_error_message(f"No editor available for {msgtype}")
     def open_bag_async(self):
         """
         Bag (ディレクトリ or .bagファイル) をユーザに選択させて、非同期でメタデータ読込。
