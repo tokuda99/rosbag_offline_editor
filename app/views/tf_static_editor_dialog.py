@@ -1,42 +1,47 @@
-"""
-TF Static Editor Dialog
-- ズーム時チラつき抑制
-- XY 原点グリッド (自動密度)
-- 軸矢印スケール自動調整
-- 初期表示で軸矢印が二重に出るバグ修正
-"""
 
-import yaml
 from collections import defaultdict, deque
-import numpy as np
-from scipy.spatial.transform import Rotation
 
-from PyQt5.QtWidgets import (
-    QDialog, QVBoxLayout, QHBoxLayout, QGridLayout,
-    QGroupBox, QLabel, QPushButton, QPlainTextEdit,
-    QTreeWidget, QTreeWidgetItem, QComboBox, QDoubleSpinBox,
-    QDialogButtonBox, QMessageBox
-)
-from PyQt5 import QtCore
+import numpy as np
 
 # PyVista & Qt 連携
 import pyvista as pv
+import yaml
+from PyQt5 import QtCore
+from PyQt5.QtWidgets import (
+    QComboBox,
+    QDialog,
+    QDialogButtonBox,
+    QDoubleSpinBox,
+    QGridLayout,
+    QGroupBox,
+    QHBoxLayout,
+    QLabel,
+    QMessageBox,
+    QPlainTextEdit,
+    QPushButton,
+    QStackedWidget,
+    QTreeWidget,
+    QTreeWidgetItem,
+    QVBoxLayout,
+    QWidget,
+)
 from pyvistaqt import QtInteractor
+from scipy.spatial.transform import Rotation
 
 
 # ─────────────────────────────────────────────
 # ヘルパー
 # ─────────────────────────────────────────────
-def rpy_to_quaternion(roll, pitch, yaw):
-    """Roll, Pitch, Yaw (deg) → quaternion [x, y, z, w]"""
-    return Rotation.from_euler("xyz", [roll, pitch, yaw], degrees=True).as_quat()
+def rpy_to_quaternion(roll, pitch, yaw, degrees=True):
+    """Roll, Pitch, Yaw → quaternion [x, y, z, w]"""
+    return Rotation.from_euler("xyz", [roll, pitch, yaw], degrees=degrees).as_quat()
 
 
-def quaternion_to_rpy(quat):
-    """quaternion [x, y, z, w] → Roll, Pitch, Yaw (deg)"""
+def quaternion_to_rpy(quat, degrees=True):
+    """quaternion [x, y, z, w] → Roll, Pitch, Yaw"""
     if not np.any(quat):
         return 0.0, 0.0, 0.0
-    e = Rotation.from_quat(quat).as_euler("xyz", degrees=True)
+    e = Rotation.from_quat(quat).as_euler("xyz", degrees=degrees)
     return float(e[0]), float(e[1]), float(e[2])
 
 
@@ -136,10 +141,15 @@ class TFStaticEditorDialog(QDialog):
         grid.addWidget(QLabel("X:"), 2, 0); grid.addWidget(self.txs, 2, 1)
         grid.addWidget(QLabel("Y:"), 3, 0); grid.addWidget(self.tys, 3, 1)
         grid.addWidget(QLabel("Z:"), 4, 0); grid.addWidget(self.tzs, 4, 1)
-        grid.addWidget(QLabel("Rotation (deg)"), 1, 3, 1, 2)
-        grid.addWidget(QLabel("Roll:"), 2, 3); grid.addWidget(self.rs, 2, 4)
-        grid.addWidget(QLabel("Pitch:"), 3, 3); grid.addWidget(self.ps, 3, 4)
-        grid.addWidget(QLabel("Yaw:"), 4, 3); grid.addWidget(self.ys, 4, 4)
+        
+        self.rot_mode_combo = QComboBox()
+        self.rot_mode_combo.addItems(["Euler (deg)", "Euler (rad)", "Quaternion"])
+        self.rot_mode_combo.currentIndexChanged.connect(self._on_rot_mode_changed)
+        self.rot_stack = QStackedWidget()
+        self._build_rotation_editors()
+        grid.addWidget(QLabel("Rotation"), 1, 3, 1, 1)
+        grid.addWidget(self.rot_mode_combo, 1, 4, 1, 2)
+        grid.addWidget(self.rot_stack, 2, 3, 3, 3)
         g_edit.setLayout(grid)
         left.addWidget(g_edit)
 
@@ -193,6 +203,35 @@ class TFStaticEditorDialog(QDialog):
         sb = QDoubleSpinBox(); sb.setRange(minv, maxv); sb.setDecimals(4); sb.setSingleStep(0.01)
         return sb
 
+    def _build_rotation_editors(self):
+        # Page 0: Euler (deg)
+        page_deg = QWidget()
+        layout_deg = QGridLayout(page_deg)
+        self.rs = self._spin(-180, 180); self.ps = self._spin(-90, 90); self.ys = self._spin(-180, 180)
+        layout_deg.addWidget(QLabel("Roll:"), 0, 0); layout_deg.addWidget(self.rs, 0, 1)
+        layout_deg.addWidget(QLabel("Pitch:"), 1, 0); layout_deg.addWidget(self.ps, 1, 1)
+        layout_deg.addWidget(QLabel("Yaw:"), 2, 0); layout_deg.addWidget(self.ys, 2, 1)
+        self.rot_stack.addWidget(page_deg)
+
+        # Page 1: Euler (rad)
+        page_rad = QWidget()
+        layout_rad = QGridLayout(page_rad)
+        self.rad_r = self._spin(-np.pi, np.pi); self.rad_p = self._spin(-np.pi/2, np.pi/2); self.rad_y = self._spin(-np.pi, np.pi)
+        layout_rad.addWidget(QLabel("R(rad):"), 0, 0); layout_rad.addWidget(self.rad_r, 0, 1)
+        layout_rad.addWidget(QLabel("P(rad):"), 1, 0); layout_rad.addWidget(self.rad_p, 1, 1)
+        layout_rad.addWidget(QLabel("Y(rad):"), 2, 0); layout_rad.addWidget(self.rad_y, 2, 1)
+        self.rot_stack.addWidget(page_rad)
+
+        # Page 2: Quaternion
+        page_quat = QWidget()
+        layout_quat = QGridLayout(page_quat)
+        self.qx = self._spin(-1, 1); self.qy = self._spin(-1, 1)
+        self.qz = self._spin(-1, 1); self.qw = self._spin(-1, 1)
+        layout_quat.addWidget(QLabel("X:"), 0, 0); layout_quat.addWidget(self.qx, 0, 1)
+        layout_quat.addWidget(QLabel("Y:"), 1, 0); layout_quat.addWidget(self.qy, 1, 1)
+        layout_quat.addWidget(QLabel("Z:"), 2, 0); layout_quat.addWidget(self.qz, 2, 1)
+        layout_quat.addWidget(QLabel("W:"), 3, 0); layout_quat.addWidget(self.qw, 3, 1)
+        self.rot_stack.addWidget(page_quat)
     # ==============================================================
     # Rebuild
     # ==============================================================
@@ -264,15 +303,47 @@ class TFStaticEditorDialog(QDialog):
         self.sel_tf.blockSignals(False)
         self._on_tf_selected()
 
+    def _on_rot_mode_changed(self, index):
+        self.rot_stack.setCurrentIndex(index)
+        self._on_tf_selected() # モード切替時に現在のTF値を新しいUIに反映
+
     def _on_tf_selected(self):
         i = self.sel_tf.currentIndex()
         if i < 0 or i >= len(self.transforms): return
-        tf = self.transforms[i]; t = tf.transform.translation; r = tf.transform.rotation
-        vals = (self.txs, t.x), (self.tys, t.y), (self.tzs, t.z)
-        for sb, v in vals: sb.blockSignals(True); sb.setValue(v); sb.blockSignals(False)
-        roll, pitch, yaw = quaternion_to_rpy([r.x, r.y, r.z, r.w])
-        for sb, v in ((self.rs, roll), (self.ps, pitch), (self.ys, yaw)):
-            sb.blockSignals(True); sb.setValue(v); sb.blockSignals(False)
+        tf = self.transforms[i]
+        t = tf.transform.translation
+        r = tf.transform.rotation
+        quat = [r.x, r.y, r.z, r.w]
+
+        # --- Translation ---
+        all_spins = (self.txs, self.tys, self.tzs, self.rs, self.ps, self.ys, 
+                     self.rad_r, self.rad_p, self.rad_y,
+                     self.qx, self.qy, self.qz, self.qw)
+        for s in all_spins: s.blockSignals(True)
+
+        self.txs.setValue(t.x)
+        self.tys.setValue(t.y)
+        self.tzs.setValue(t.z)
+
+        # --- Rotation (by mode) ---
+        mode = self.rot_mode_combo.currentIndex()
+        if mode == 0: # Euler (deg)
+            roll, pitch, yaw = quaternion_to_rpy(quat, degrees=True)
+            self.rs.setValue(roll)
+            self.ps.setValue(pitch)
+            self.ys.setValue(yaw)
+        elif mode == 1: # Euler (rad)
+            roll, pitch, yaw = quaternion_to_rpy(quat, degrees=False)
+            self.rad_r.setValue(roll)
+            self.rad_p.setValue(pitch)
+            self.rad_y.setValue(yaw)
+        elif mode == 2: # Quaternion
+            self.qx.setValue(r.x)
+            self.qy.setValue(r.y)
+            self.qz.setValue(r.z)
+            self.qw.setValue(r.w)
+            
+        for s in all_spins: s.blockSignals(False)
 
     # --------------------------------------------------------------
     # spin → TF
@@ -281,12 +352,34 @@ class TFStaticEditorDialog(QDialog):
         i = self.sel_tf.currentIndex()
         if i < 0 or i >= len(self.transforms): return
         tf = self.transforms[i]
-        quat = rpy_to_quaternion(self.rs.value(), self.ps.value(), self.ys.value())
+
+        # --- Translation ---
         tf.transform.translation.x = self.txs.value()
         tf.transform.translation.y = self.tys.value()
         tf.transform.translation.z = self.tzs.value()
+        
+        # --- Rotation (by mode) ---
+        mode = self.rot_mode_combo.currentIndex()
+        quat = np.array([0.0, 0.0, 0.0, 1.0])
+        try:
+            if mode == 0: # Euler (deg)
+                quat = rpy_to_quaternion(self.rs.value(), self.ps.value(), self.ys.value(), degrees=True)
+            elif mode == 1: # Euler (rad)
+                quat = rpy_to_quaternion(self.rad_r.value(), self.rad_p.value(), self.rad_y.value(), degrees=False)
+            elif mode == 2: # Quaternion
+                q_in = np.array([self.qx.value(), self.qy.value(), self.qz.value(), self.qw.value()])
+                norm = np.linalg.norm(q_in)
+                if norm > 1e-6: # ゼロベクトルでなければ正規化
+                    quat = q_in / norm
+        except Exception: # scipyが不正な値でエラーを出す場合がある
+             pass # 不正な中間値は無視
+
         tf.transform.rotation.x, tf.transform.rotation.y, tf.transform.rotation.z, tf.transform.rotation.w = quat
-        self._rebuild_all()
+
+        # --- Update 3D View (NOT rebuild all) ---
+        # これがバグ修正の核心部分。UI全体を再構築せず、データと3Dビューのみ更新
+        self._calc_global_poses()
+        self._update_3d_preview()
 
     # --------------------------------------------------------------
     # fixed / pc selector
